@@ -1,0 +1,6 @@
+gradio
+opencv-python
+numpy
+torch
+torchvision
+Pillow

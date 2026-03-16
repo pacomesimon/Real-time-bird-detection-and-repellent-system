@@ -1,15 +1,21 @@
 import cv2
 import numpy as np
 import time
-
+import json
+import os
+import random
 import torch
 from torchvision import transforms
 import torch.nn as nn
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+with open("config.json", "r") as f:
+    CONFIG = json.load(f)
 
-# Define a simple custom model
-# Define a simple custom model
+DEVICE = CONFIG["model"]["device"]
+if DEVICE == "auto":
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# a simple custom model
 class CustomCNN(nn.Module):
     def __init__(self):
         super(CustomCNN, self).__init__()
@@ -21,11 +27,7 @@ class CustomCNN(nn.Module):
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2)
         )
-        # Calculate the output size of the convolutional layers
-        # This depends on the input image size and the pooling/stride
-        # For 224x224 input, after two max pools with kernel 2 and stride 2,
-        # the spatial dimensions become 224 / (2*2) = 56
-        # The number of channels is 32
+        # 
         self.classifier = nn.Sequential(
             nn.Linear(1 * 56 * 56, 32), # Adjust input features based on actual output size
             nn.ReLU(),
@@ -40,32 +42,32 @@ class CustomCNN(nn.Module):
 
 model = CustomCNN().to(DEVICE)
 
-model.load_state_dict(torch.load("custom_cnn_model.pth",
+model.load_state_dict(torch.load(CONFIG["model"]["path"],
                       map_location=torch.device(DEVICE)
                       )
                       )
-model = torch.quantization.quantize_dynamic(
-    model,
-     None,#{nn.Linear},
-    dtype=torch.qint8
-)
+
+quant_dtype = CONFIG["model"]["quantization"]
+if quant_dtype == "qint8":
+    model = torch.quantization.quantize_dynamic(
+        model,
+        None,
+        dtype=torch.qint8
+    )
 model.eval()
 print("model loaded")
 
 class BirdDetection():
-    def __init__(self, threshold = .50,
-                 percentile = 50,
-                 #
-                #  torelable_min = 0.002,
-                #  torelable_max = 0.05,
-                 classification_model = model,
-                 horizon_height_ratio = 0.999999999999,
-                 min_bbox_dim = 63,
+    def __init__(self, 
+                 threshold=CONFIG["bird_detection"]["threshold"],
+                 percentile=CONFIG["bird_detection"]["percentile"],
+                 classification_model=model,
+                 horizon_height_ratio=CONFIG["bird_detection"]["horizon_height_ratio"],
+                 min_bbox_dim=CONFIG["bird_detection"]["min_bbox_dim"],
+                 max_bboxes = CONFIG["bird_detection"]["max_bboxes"],
                  ):
         self.threshold = threshold
         self.percentile = percentile
-        # self.torelable_min = torelable_min
-        # self.torelable_max = torelable_max
         self.transform = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((224, 224)),  # Resize images to a fixed size
@@ -77,6 +79,7 @@ class BirdDetection():
         self.class_inf_time = []
         self.horizon_height_ratio = horizon_height_ratio
         self.min_bbox_dim = min_bbox_dim
+        self.max_bboxes = max_bboxes
     def binary_image_to_coco_bboxes(self, binary_img):
       """
       Args:
@@ -92,10 +95,9 @@ class BirdDetection():
       binary_img[horizon_height:, :] = 0
       binary_img = (binary_img * 255).astype(np.uint8)
 
-      contours_tuple = cv2.findContours(binary_img, cv2.RETR_EXTERNAL,
+      contours, _ = cv2.findContours(binary_img, cv2.RETR_EXTERNAL,
                                      cv2.CHAIN_APPROX_SIMPLE
                                      )
-      contours = contours_tuple[0] if len(contours_tuple) == 2 else contours_tuple[1]
 
       coco_bboxes = []
       for contour in contours:
@@ -106,7 +108,6 @@ class BirdDetection():
           if h < self.min_bbox_dim:
             y = y - ((self.min_bbox_dim-h)//2)
             h = self.min_bbox_dim
-          # x,y = x-(w//2), y-(h//2)
           coco_bboxes.append({
               'category_id': 0,
               'bbox': [float(x), float(y), float(w), float(h)]
@@ -135,21 +136,10 @@ class BirdDetection():
 
     def __call__(self, img,prev_img,torelable_min = None,
                  torelable_max = None):
-      # if torelable_min is None:
-      #   torelable_min = self.torelable_min
-      # if torelable_max is None:
-      #   torelable_max = self.torelable_max
       t1 = time.time()
       img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
       prev_img_gray = cv2.cvtColor(prev_img, cv2.COLOR_BGR2GRAY)
 
-      # flow = cv2.calcOpticalFlowFarneback(img_gray, prev_img_gray, None, 0.5, 2,
-      #                                     3,
-      #                                     1, 1, 1.2, 0)
-      # # prev, next, flow, pyr_scale, levels, winsize, iterations, poly_n, poly_sigma, flags
-
-      # flow_magnitude = np.abs(flow[..., 0])+ np.abs(flow[..., 1])
-      # diff = flow_magnitude
       diff = cv2.absdiff(img_gray, prev_img_gray)
 
       diff_min, diff_max = diff.min(), diff.max()
@@ -157,11 +147,6 @@ class BirdDetection():
       diff_mean = diff.mean()
       self.change_inf_time.append(time.time()-t1)
 
-      # if (diff_mean >= torelable_max) or (diff_mean <= torelable_min):
-      #   coco_bboxes = []
-      #   self.contour_inf_time.append((0,0))
-      #   self.class_inf_time.append((0,0))
-      # else:
       if True:
         t1 = time.time()
         mask_threshold = np.percentile(diff[diff >= self.threshold],
@@ -171,7 +156,11 @@ class BirdDetection():
         total_n_boxes = len(coco_bboxes)
         self.contour_inf_time.append((total_n_boxes,time.time()-t1))
         t1 = time.time()
-        coco_bboxes = self.classify_image_bboxes(img, coco_bboxes) #TODO
+        coco_bboxes_raw = coco_bboxes.copy()
+        if len(coco_bboxes_raw)>self.max_bboxes:
+            coco_bboxes_raw = random.choices(coco_bboxes_raw,k=self.max_bboxes)
+        coco_bboxes = self.classify_image_bboxes(img, coco_bboxes_raw) #TODO
+        coco_bboxes += self.classify_image_bboxes(prev_img, coco_bboxes_raw)
         self.class_inf_time.append((total_n_boxes,time.time()-t1))
       return diff, coco_bboxes
 
@@ -198,43 +187,46 @@ def draw_coco_bboxes(image, annotations, color=(255, 0, 0), thickness=50):
     return img_copy
 
 
-bird_detector = BirdDetection() #TODO
+bird_detector = BirdDetection()
 
 class Agent:
     def __init__(self,sensor, 
-                  min_angle=0, max_angle=np.pi, 
-                  stride = np.pi/3,
-                  bird_detector = bird_detector
+                  min_angle=CONFIG["agent"]["min_angle"], 
+                  max_angle=CONFIG["agent"]["max_angle"], 
+                  stride=CONFIG["agent"]["stride"],
+                  yaws = [0,0],
+                  bird_detector=None
                   ):
         self.min_angle = min_angle
         self.max_angle = max_angle
         self.stride = stride
-        self.yaws = np.arange(self.min_angle+self.stride/2, 
-                              self.max_angle-self.stride/2, 
-                              self.stride
-                              )
-        print(f"Yaws: {self.yaws * 180 / np.pi}")
+        self.yaws = yaws
+        if bird_detector is None:
+            self.bird_detector = BirdDetection()
+        else:
+            self.bird_detector = bird_detector
         self.sensor = sensor
-        self.bird_detector = bird_detector
 
-    def extract_face(self, yaw):
-        face = self.sensor.extract_face(yaw) # TODO: rotate, take a pic, and return it
+    def extract_face(self, yaw=0.0):
+        face = self.sensor.take_photo()
         return face
 
     def predict(self,current_image, prev_image):
-      diff, coco_bboxes = bird_detector(current_image,prev_image)
+      diff, coco_bboxes = self.bird_detector(current_image,prev_image)
       return coco_bboxes
     
     def handle_prediction(self,current_image, prev_image, coco_bboxes, yaw):
+      viz_config = CONFIG["agent"]["visualization"]
       image = draw_coco_bboxes(
         current_image,
         coco_bboxes,
-        (255,0,0)# rgb
+        tuple(viz_config["bbox_color"]),
+        viz_config["bbox_thickness"]
       )
-      return cv2.resize(image, (400,400*image.shape[0]//image.shape[1]), interpolation=cv2.INTER_NEAREST) 
+      preview_size = tuple(viz_config["preview_size"])
+      return cv2.resize(image, preview_size, interpolation=cv2.INTER_NEAREST) 
 
-    def work(self, state=None):
-      if state is None:
+    def work(self):
         turn = 1
         while True:
           yaws = self.yaws[::turn]
@@ -245,11 +237,3 @@ class Agent:
               coco_bboxes = self.predict(current_image, prev_image)
               artifacts = self.handle_prediction(current_image, prev_image, coco_bboxes,yaw)
               yield artifacts
-    def work_once(self, state=[]):
-        if len(state) < 2:
-          return np.random.normal(loc=128, scale=30, size=(300,400,3)).clip(0,255).astype(np.uint8)
-        prev_image = state[-2]
-        current_image = state[-1]
-        coco_bboxes = self.predict(current_image, prev_image)
-        artifacts = self.handle_prediction(current_image, prev_image, coco_bboxes,0)
-        return artifacts

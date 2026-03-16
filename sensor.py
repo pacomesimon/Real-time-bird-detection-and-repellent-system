@@ -1,58 +1,62 @@
-import numpy as np
-import cv2
-import random
+from PIL import Image
 from datetime import datetime
-from gpiozero import Servo
-import os
-from picamera2 import Picamera2
 import time
+import json
+import os
+import numpy as np
+from picamera2 import Picamera2
 
 class Sensor:
-    def __init__(self, min_angle=0, max_angle=np.pi, servo_pin = 18):
-        self.picam2 = Picamera2()
+    def __init__(self, cam=0, config_path="config.json"):
+        with open(config_path, "r") as f:
+            self.config = json.load(f)["sensor"]
+        
+        self.cam = cam
+        self.picam2 = Picamera2(cam)
         sensor_resolution = self.picam2.sensor_resolution
-        still_config = self.picam2.create_still_configuration(main={"size": sensor_resolution})
+        scale = self.config.get("resolution_scale", 0.5)
+        sensor_resolution = [int(i * scale) for i in sensor_resolution]
+        still_config = self.picam2.create_still_configuration(
+            main={"size": sensor_resolution},
+            )
         self.picam2.configure(still_config)
         self.picam2.start()
-        time.sleep(2)
-        self.min_angle = min_angle
-        self.max_angle = max_angle
-        # Initialize servo on GPIO pin 18 with custom pulse widths
-        self.servo = Servo(
-            servo_pin, 
-            min_pulse_width=500 / 1_000_000, 
-            max_pulse_width=2500 / 1_000_000
-        )
+        time.sleep(self.config.get("startup_sleep", 2.0))
     
-    def normalize_angle(self, angle):
-        n = (angle - self.min_angle) / (self.max_angle - self.min_angle)
-        n = (n*2) - 1
-        return n
-        
-    def rotate_gear(self, n):
-         self.servo.value = n   
-         
-    def delete_file(self,filename):
-            os.system(f"rm '{filename}'")
-    
-    def take_photo(self):
-            # timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # random_number = random.random()
-            # filename = f"{timestamp}__{random_number}.jpg"
-            # os.system(f"rpicam-still -n --immediate -o '{filename}'")
-            # image = cv2.imread(filename)
-            # image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            # self.delete_file(filename)
+    def adjust_focus(self, lens_position):
+        """Set the lens position.
+
+        Args:
+            lens_position (float): Lens position in "diopters" (units of 1/meters). See  https://github.com/raspberrypi/picamera2/issues/978#issue-2179641066 
+        """
+        self.picam2.set_controls(
+                {
+                    "AfMode": self.config.get("af_mode", 0), 
+                    "LensPosition": lens_position
+                }
+            ) 
+
+    def take_photo(self,save=False):
             image = self.picam2.capture_array() # image compatible with cv2
+            if save:
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                time_seconds = time.time()
+                filename = f"cam{self.cam}_{timestamp}_{time_seconds}.jpg"
+                # PIL expects RGB, Picamera2 default is also RGB
+                Image.fromarray(image).save(filename)
             return image
-            
-            
-    def extract_face(self, yaw):
-        # Dummy implementation, replace with actual sensor code
-        # For example, capture an image from a camera at the given yaw angle
-        n = self.normalize_angle(yaw)
-        self.rotate_gear(n)
-        #image = np.zeros((512, 512, 3), dtype=np.uint8)
-        time.sleep(.2)
-        image = self.take_photo()
-        return image
+
+class MultiSensor:
+    def __init__(self, sensors):
+        self.sensors = sensors
+    def adjust_focus(self, lens_position):
+        for sensor in self.sensors:
+            sensor.adjust_focus(lens_position)
+    def take_photo(self,save=False):
+        images = []
+        for sensor in self.sensors:
+            images.append(sensor.take_photo(save=save))
+        return np.concatenate(images, axis=1)
+
+if __name__ == "__main__":
+    print("I am here in sensor.py")

@@ -11,6 +11,3 @@ def play_buzzer():
     start_time = time.time()
     while pygame.mixer.music.get_busy() and (time.time() - start_time < 0.5):
         pygame.time.Clock().tick(10)
-
-if __name__ == "__main__":
-    play_buzzer()

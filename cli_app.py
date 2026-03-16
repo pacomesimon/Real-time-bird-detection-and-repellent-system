@@ -2,15 +2,20 @@ import os
 import cv2
 import numpy as np
 import time
+import json
 
-from sensor import Sensor
+from sensor import Sensor, MultiSensor
 from agent import Agent
 from siren.play import play_buzzer
 from PIL import Image
 
 
-sensor = Sensor()
-pano_agent = Agent(sensor = sensor)
+with open("config.json", "r") as f:
+    CONFIG = json.load(f)["cli_app"]
+
+sensor = MultiSensor([Sensor(1), Sensor(0)])
+# sensor = Sensor(0)
+pano_agent = Agent(sensor=sensor)
 
 
 def get_angles_from_bboxes(bboxes, yaw):
@@ -23,14 +28,14 @@ def get_angles_from_bboxes(bboxes, yaw):
     coordinates_y = all_bboxes[:,1] + all_bboxes[:,3]/2
 
     yaw = (yaw * 180 / np.pi)
-    horizontal_FOV = 66 # degrees 
+    horizontal_FOV = CONFIG["fov_horizontal"]
     horizontal_bias = yaw - horizontal_FOV/2
-    horizontal_resolution = 4056
+    horizontal_resolution = CONFIG["resolution_horizontal"]
     horizontal_angles = (horizontal_resolution - coordinates_x) * (horizontal_FOV/horizontal_resolution) + horizontal_bias
 
-    vertical_FOV = 52.3 # degrees
-    vertical_bias = 45
-    vertical_resolution = 3040
+    vertical_FOV = CONFIG["fov_vertical"]
+    vertical_bias = CONFIG["vertical_bias"]
+    vertical_resolution = CONFIG["resolution_vertical"]
     vertical_angles = coordinates_y * (vertical_FOV/vertical_resolution) + vertical_bias
 
     all_angles = np.zeros_like(all_bboxes[:,:2])
@@ -38,9 +43,10 @@ def get_angles_from_bboxes(bboxes, yaw):
     all_angles[:,1] = vertical_angles
     return all_angles   
 
-save_images_bool_txt_path = "../pi_online_evaluation/save_images_bool.txt"
-with open(save_images_bool_txt_path, "w") as f:
-            f.write('0')
+save_images_bool_txt_path = CONFIG["save_images_bool_path"]
+save_images_dir = CONFIG["cached_images_dir"]
+if not os.path.exists(save_images_dir):
+    os.makedirs(save_images_dir)
 
 def handle_prediction_log(current_image, prev_image, coco_bboxes,yaw):
       # Read save_images_bool.txt setting
@@ -51,8 +57,8 @@ def handle_prediction_log(current_image, prev_image, coco_bboxes,yaw):
           # Save current_image and prev_image
           timestamp = time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime())
           pair_timestamp = time.time()
-          curr_img_path = os.path.join("cached_images", f"{timestamp}_{pair_timestamp}_1.jpg")
-          prev_img_path = os.path.join("cached_images", f"{timestamp}_{pair_timestamp}_0.jpg")
+          curr_img_path = os.path.join(save_images_dir, f"{timestamp}_{pair_timestamp}_1.jpg")
+          prev_img_path = os.path.join(save_images_dir, f"{timestamp}_{pair_timestamp}_0.jpg")
           
           Image.fromarray(current_image).save(curr_img_path)
           Image.fromarray(prev_image).save(prev_img_path)
@@ -69,14 +75,14 @@ def handle_prediction_log(current_image, prev_image, coco_bboxes,yaw):
       logs = []
       for angles in all_angles:
         logs.append(
-            f"{timestamp} {angles[0]} {angles[1]}"
+            f"{timestamp} {curr_img_path} {angles[0]} {angles[1]}"
         )
       return "\n".join(logs)
 
 pano_agent.handle_prediction = handle_prediction_log
 
-with open("predictions_bboxes.txt", "a") as f:
+with open(CONFIG["predictions_log_path"], "a") as f:
   for prediction in pano_agent.work():
     print(prediction)
-    if type(prediction) != tuple:
+    if not isinstance(prediction, tuple):
       f.write(str(prediction) + "\n")

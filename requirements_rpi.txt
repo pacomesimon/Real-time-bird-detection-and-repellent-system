@@ -1,0 +1,8 @@
+gradio
+opencv-python-headless
+numpy
+torch
+torchvision
+Pillow
+picamera2
+pygame

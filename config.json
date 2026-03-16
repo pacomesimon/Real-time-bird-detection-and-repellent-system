@@ -1,0 +1,64 @@
+{
+    "sensor": {
+        "cam": 0,
+        "resolution_scale": 0.5,
+        "startup_sleep": 2.0,
+        "default_focus": 0.5,
+        "af_mode": 0,
+        "cached_images_dir": "cached_images"
+    },
+    "model": {
+        "path": "custom_cnn_model.pth",
+        "input_size": [
+            224,
+            224
+        ],
+        "device": "auto",
+        "quantization": "qint8"
+    },
+    "bird_detection": {
+        "threshold": 0.999,
+        "percentile": 99,
+        "horizon_height_ratio": 0.999999,
+        "min_bbox_dim": 112,
+        "max_bboxes": 10
+    },
+    "agent": {
+        "min_angle": 0.0,
+        "max_angle": 3.141592653589793,
+        "stride": 1.0471975511965976,
+        "visualization": {
+            "bbox_color": [
+                255,
+                0,
+                0
+            ],
+            "bbox_thickness": 50,
+            "preview_size": [
+                925,
+                347
+            ]
+        }
+    },
+    "gui_app": {
+        "server_name": "0.0.0.0",
+        "share": true,
+        "focus_slider": {
+            "min": 0.001,
+            "max": 10.0,
+            "step": 0.1,
+            "default": 1.0
+        }
+    },
+    "cli_app": {
+        "fov_horizontal": 136.0,
+        "fov_vertical": 56.0,
+        "vertical_bias": 45.0,
+        "resolution_horizontal": 9248,
+        "resolution_vertical": 3472,
+        "save_images_bool_path": "save_images_bool.txt",
+        "predictions_log_path": "predictions_bboxes.txt",
+        "cached_images_dir": "cached_images",
+        "process_id": null
+    }
+}
